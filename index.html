@@ -101,11 +101,17 @@
 
     <script>
         // =========== Configurações do MQTT =============
-        const MQTT_BROKER = 'wss://broker.hivemq.com:8884/mqtt'; // ATENÇÃO: use wss:// e a porta 8884 para WebSockets
+        const MQTT_BROKER = 'wss://broker.hivemq.com:8884/mqtt';
         const MQTT_TOPIC = 'br/com/meuprojeto/esp32c3/mq2';
         
         // =========== Configurações do Gráfico =============
-        const MAX_POINTS = 30; // Quantidade de pontos a exibir no gráfico
+        const MAX_POINTS = 30;
+
+        // << NOVO: Cores para os estados do gráfico
+        const normalBorderColor = 'rgba(79, 195, 247, 1)';
+        const normalBgColor = 'rgba(79, 195, 247, 0.2)';
+        const alertBorderColor = 'rgba(211, 47, 47, 1)';
+        const alertBgColor = 'rgba(211, 47, 47, 0.2)';
 
         // --- Elementos da Página (DOM) ---
         const connectionStatusEl = document.getElementById('connectionStatus');
@@ -117,21 +123,21 @@
         const gasChart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: [], // Timestamps
+                labels: [],
                 datasets: [{
                     label: 'Nível de Gás (Analógico)',
-                    data: [], // Valores
-                    borderColor: 'rgba(79, 195, 247, 1)',
-                    backgroundColor: 'rgba(79, 195, 247, 0.2)',
+                    data: [],
+                    borderColor: normalBorderColor, // << ALTERADO: Usa a cor normal inicial
+                    backgroundColor: normalBgColor, // << ALTERADO: Usa a cor normal inicial
                     borderWidth: 2,
                     fill: true,
-                    tension: 0.4 // Deixa a linha mais suave
+                    tension: 0.4
                 }]
             },
             options: {
                 scales: {
                     y: {
-                        beginAtZero: false, // O eixo Y pode começar em um valor diferente de zero
+                        beginAtZero: false,
                         ticks: { color: '#e0e0e0' }
                     },
                     x: {
@@ -150,57 +156,37 @@
         console.log('Conectando ao broker:', MQTT_BROKER);
         const client = mqtt.connect(MQTT_BROKER);
 
-        // Evento que é disparado quando a conexão é estabelecida
         client.on('connect', () => {
             console.log('Conectado ao broker MQTT com sucesso!');
             connectionStatusEl.textContent = 'Conectado e ouvindo o tópico!';
-            connectionStatusEl.style.color = '#4caf50'; // Verde
+            connectionStatusEl.style.color = '#4caf50';
 
-            // Inscreve-se no tópico para receber as mensagens
             client.subscribe(MQTT_TOPIC, (err) => {
                 if (err) {
                     console.error('Erro ao se inscrever no tópico:', err);
                     connectionStatusEl.textContent = 'Erro ao se inscrever no tópico.';
-                    connectionStatusEl.style.color = '#f44336'; // Vermelho
+                    connectionStatusEl.style.color = '#f44336';
                 } else {
                     console.log('Inscrito no tópico:', MQTT_TOPIC);
                 }
             });
         });
 
-        // Evento que é disparado a cada nova mensagem que chega
         client.on('message', (topic, message) => {
             try {
                 const payloadStr = message.toString();
                 console.log(`Mensagem recebida do tópico ${topic}: ${payloadStr}`);
                 const data = JSON.parse(payloadStr);
-
-                // Atualiza os elementos da página com os novos dados
                 updateDashboard(data);
-
             } catch (e) {
                 console.error('Erro ao processar mensagem JSON:', e);
             }
         });
-
-        // Eventos para monitorar o estado da conexão
-        client.on('error', (err) => {
-            console.error('Erro de conexão:', err);
-            connectionStatusEl.textContent = 'Erro de conexão. Tentando reconectar...';
-            connectionStatusEl.style.color = '#f44336';
-        });
-
-        client.on('reconnect', () => {
-            console.log('Reconectando...');
-            connectionStatusEl.textContent = 'Reconectando ao broker...';
-            connectionStatusEl.style.color = '#ff9800'; // Laranja
-        });
-
-        client.on('close', () => {
-            console.log('Conexão fechada.');
-            connectionStatusEl.textContent = 'Conexão perdida.';
-            connectionStatusEl.style.color = '#f44336';
-        });
+        
+        // (O restante dos eventos 'error', 'reconnect', 'close' permanecem iguais)
+        client.on('error', (err) => { console.error('Erro de conexão:', err); connectionStatusEl.textContent = 'Erro de conexão.'; connectionStatusEl.style.color = '#f44336'; });
+        client.on('reconnect', () => { console.log('Reconectando...'); connectionStatusEl.textContent = 'Reconectando...'; connectionStatusEl.style.color = '#ff9800'; });
+        client.on('close', () => { console.log('Conexão fechada.'); connectionStatusEl.textContent = 'Conexão perdida.'; connectionStatusEl.style.color = '#f44336'; });
 
         // --- Funções de Atualização da Interface ---
         function updateDashboard(data) {
@@ -217,17 +203,27 @@
             }
 
             // Atualiza o gráfico
-            updateChart(data.valorAnalogico);
+            updateChart(data); // << ALTERADO: Passa o objeto 'data' completo
         }
 
-        function updateChart(newValue) {
+        // << ALTERADO: A função agora recebe o objeto 'data' para saber o status
+        function updateChart(data) {
             const chart = gasChart;
             const now = new Date();
             const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
 
+            // << NOVO: Lógica para mudar a cor do gráfico
+            if (data.status === 'GAS_DETECTADO') {
+                chart.data.datasets[0].borderColor = alertBorderColor;
+                chart.data.datasets[0].backgroundColor = alertBgColor;
+            } else {
+                chart.data.datasets[0].borderColor = normalBorderColor;
+                chart.data.datasets[0].backgroundColor = normalBgColor;
+            }
+
             // Adiciona o novo dado e o timestamp
             chart.data.labels.push(timestamp);
-            chart.data.datasets[0].data.push(newValue);
+            chart.data.datasets[0].data.push(data.valorAnalogico);
 
             // Remove o dado mais antigo se o limite for atingido
             if (chart.data.labels.length > MAX_POINTS) {
