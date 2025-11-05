@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Gás IoT em Tempo Real</title>
+    <!-- Incluindo a biblioteca MQTT.js via CDN -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- Incluindo a biblioteca Chart.js via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Estilos CSS para a página -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+
+        .dashboard {
+            background-color: #1e1e1e;
+            padding: 30px 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 800px;
+        }
+
+        h1 {
+            color: #ffffff;
+            margin-bottom: 10px;
+        }
+
+        .status-box {
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-size: 1.5em;
+            font-weight: bold;
+            transition: background-color 0.5s ease, color 0.5s ease;
+        }
+
+        .status-normal {
+            background-color: #2e7d32; /* Verde escuro */
+            color: #ffffff;
+        }
+
+        .status-detected {
+            background-color: #d32f2f; /* Vermelho escuro */
+            color: #ffffff;
+        }
+        
+        .connection-status {
+            font-size: 0.9em;
+            color: #888;
+            margin-bottom: 20px;
+        }
+
+        .data-display {
+            margin-top: 25px;
+            font-size: 1.2em;
+        }
+
+        #analogValue {
+            font-weight: 700;
+            font-size: 1.8em;
+            color: #4fc3f7; /* Azul claro */
+        }
+        
+        .chart-container {
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard">
+        <h1>Monitor de Gás em Tempo Real (MQ-2)</h1>
+        <p class="connection-status" id="connectionStatus">Conectando ao broker MQTT...</p>
+
+        <div id="statusBox" class="status-box">
+            Aguardando dados...
+        </div>
+
+        <div class="data-display">
+            Nível de Concentração (Valor Analógico):
+            <p id="analogValue">---</p>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="gasChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // =========== Configurações do MQTT =============
+        const MQTT_BROKER = 'wss://broker.hivemq.com:8884/mqtt'; // ATENÇÃO: use wss:// e a porta 8884 para WebSockets
+        const MQTT_TOPIC = 'br/com/meuprojeto/esp32c3/mq2';
+        
+        // =========== Configurações do Gráfico =============
+        const MAX_POINTS = 30; // Quantidade de pontos a exibir no gráfico
+
+        // --- Elementos da Página (DOM) ---
+        const connectionStatusEl = document.getElementById('connectionStatus');
+        const statusBoxEl = document.getElementById('statusBox');
+        const analogValueEl = document.getElementById('analogValue');
+
+        // --- Inicialização do Gráfico (Chart.js) ---
+        const ctx = document.getElementById('gasChart').getContext('2d');
+        const gasChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Timestamps
+                datasets: [{
+                    label: 'Nível de Gás (Analógico)',
+                    data: [], // Valores
+                    borderColor: 'rgba(79, 195, 247, 1)',
+                    backgroundColor: 'rgba(79, 195, 247, 0.2)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4 // Deixa a linha mais suave
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: false, // O eixo Y pode começar em um valor diferente de zero
+                        ticks: { color: '#e0e0e0' }
+                    },
+                    x: {
+                        ticks: { color: '#e0e0e0' }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        labels: { color: '#e0e0e0' }
+                    }
+                }
+            }
+        });
+
+        // --- Lógica de Conexão MQTT ---
+        console.log('Conectando ao broker:', MQTT_BROKER);
+        const client = mqtt.connect(MQTT_BROKER);
+
+        // Evento que é disparado quando a conexão é estabelecida
+        client.on('connect', () => {
+            console.log('Conectado ao broker MQTT com sucesso!');
+            connectionStatusEl.textContent = 'Conectado e ouvindo o tópico!';
+            connectionStatusEl.style.color = '#4caf50'; // Verde
+
+            // Inscreve-se no tópico para receber as mensagens
+            client.subscribe(MQTT_TOPIC, (err) => {
+                if (err) {
+                    console.error('Erro ao se inscrever no tópico:', err);
+                    connectionStatusEl.textContent = 'Erro ao se inscrever no tópico.';
+                    connectionStatusEl.style.color = '#f44336'; // Vermelho
+                } else {
+                    console.log('Inscrito no tópico:', MQTT_TOPIC);
+                }
+            });
+        });
+
+        // Evento que é disparado a cada nova mensagem que chega
+        client.on('message', (topic, message) => {
+            try {
+                const payloadStr = message.toString();
+                console.log(`Mensagem recebida do tópico ${topic}: ${payloadStr}`);
+                const data = JSON.parse(payloadStr);
+
+                // Atualiza os elementos da página com os novos dados
+                updateDashboard(data);
+
+            } catch (e) {
+                console.error('Erro ao processar mensagem JSON:', e);
+            }
+        });
+
+        // Eventos para monitorar o estado da conexão
+        client.on('error', (err) => {
+            console.error('Erro de conexão:', err);
+            connectionStatusEl.textContent = 'Erro de conexão. Tentando reconectar...';
+            connectionStatusEl.style.color = '#f44336';
+        });
+
+        client.on('reconnect', () => {
+            console.log('Reconectando...');
+            connectionStatusEl.textContent = 'Reconectando ao broker...';
+            connectionStatusEl.style.color = '#ff9800'; // Laranja
+        });
+
+        client.on('close', () => {
+            console.log('Conexão fechada.');
+            connectionStatusEl.textContent = 'Conexão perdida.';
+            connectionStatusEl.style.color = '#f44336';
+        });
+
+        // --- Funções de Atualização da Interface ---
+        function updateDashboard(data) {
+            // Atualiza o valor analógico
+            analogValueEl.textContent = data.valorAnalogico;
+
+            // Atualiza a caixa de status
+            if (data.status === 'GAS_DETECTADO') {
+                statusBoxEl.textContent = 'GÁS DETECTADO!';
+                statusBoxEl.className = 'status-box status-detected';
+            } else {
+                statusBoxEl.textContent = 'Status: Normal';
+                statusBoxEl.className = 'status-box status-normal';
+            }
+
+            // Atualiza o gráfico
+            updateChart(data.valorAnalogico);
+        }
+
+        function updateChart(newValue) {
+            const chart = gasChart;
+            const now = new Date();
+            const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+
+            // Adiciona o novo dado e o timestamp
+            chart.data.labels.push(timestamp);
+            chart.data.datasets[0].data.push(newValue);
+
+            // Remove o dado mais antigo se o limite for atingido
+            if (chart.data.labels.length > MAX_POINTS) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+
+            // Redesenha o gráfico
+            chart.update();
+        }
+
+    </script>
+</body>
+</html>
